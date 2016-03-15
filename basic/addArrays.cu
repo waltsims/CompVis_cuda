@@ -26,6 +26,14 @@ void cuda_check(string file, int line)
     }
 }
 
+__device__ void add (  float *a, float *b, float *c,int n ){
+	int ind = threadIdx.x + blockDim.x * blockIdx.x;
+	if (ind < n) c[ind] = a[ind]  + b[ind];
+}
+
+__global__ void vecAdd ( float *a, float *b, float *c,int n ){
+	add( a, b, c, n);
+}
 
 int main(int argc, char **argv)
 {
@@ -62,6 +70,26 @@ int main(int argc, char **argv)
     // ### 2. Always use the macro CUDA_CHECK after each CUDA call, e.g. "cudaMalloc(...); CUDA_CHECK;"
     // ###    For convenience this macro is defined directly in this file, later we will only include "helper.h"
     
+	float *d_a, *d_b, *d_c;
+	cudaMalloc( &d_a, n * sizeof(float) );
+	cudaMalloc( &d_b, n * sizeof(float) );
+	cudaMalloc( &d_c, n * sizeof(float) );
+	cudaMemcpy( d_a, a, n * sizeof(float), cudaMemcpyHostToDevice);
+	cudaMemcpy( d_b, b, n * sizeof(float), cudaMemcpyHostToDevice);
+	cudaMemcpy( d_c, c, n * sizeof(float), cudaMemcpyHostToDevice);
+
+	//Device Blocka allocation
+	dim3 block = dim3(64, 1, 1); //64 threads
+	// allocate blocks in grid
+	dim3 grid = dim3( (n + block.x - 1 ) / block.x, 1, 1);
+	
+	vecAdd <<< grid, block >>> (d_a, d_b, d_c, n);
+	
+	cudaMemcpy ( c, d_c, n * sizeof(float), cudaMemcpyDeviceToHost );
+
+	cudaFree(d_a);
+	cudaFree(d_b);
+	cudaFree(d_c);
 
 
     // print result
