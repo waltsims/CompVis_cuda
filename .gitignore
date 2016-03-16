@@ -5,3 +5,6 @@ squareArrays
 addArrays
 #Vim leftovers
 *.swp
+#Image outputs
+image_input.png
+image_result.png
