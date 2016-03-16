@@ -16,6 +16,38 @@ const float  pi = 3.141592653589793238462;
 
 // uncomment to use the camera
 //#define CAMERA
+__global__ void convolution(float *d_imgIn, float *d_kernel, float *d_imgOut,
+                            int nc, int w, int h, int w_k, int h_k) {
+  int x = threadIdx.x + blockDim.x * blockIdx.x;
+  int y = threadIdx.y + blockDim.y * blockIdx.y;
+  size_t ind = x + (size_t)w * y;
+
+  int mean = w_k / 2;
+
+  if (x < w && y < h) {
+    for (int c = 0; c < nc; c++) {
+      d_imgOut[ind + w * h * c] = 0;
+      for (int k = 0; k < w_k; k++) {
+        for (int l = 0; l < h_k; l++) {
+          int i_k = x - mean + k;
+          int j_k = y - mean + l;
+
+          if (i_k < 0)
+            i_k = 0;
+          if (i_k > w - 1)
+            i_k = w - 1;
+          if (j_k > h - 1)
+            j_k = h - 1;
+          if (j_k < 0)
+            j_k = 0;
+
+          d_imgOut[ind + w * h * c] +=
+              d_kernel[l * w_k + k] * d_imgIn[j_k * w + i_k + w * h * c];
+        }
+      }
+    }
+  }
+}
 
 int main(int argc, char **argv) {
   // Before the GPU can process your kernels, a so called "CUDA context" must be
@@ -164,22 +196,23 @@ int main(int argc, char **argv) {
     // ###
     // ###
 	//TODO create function for CPU kernel calc
+	float *d_kernel;
+	float *d_imgIn;
+	float *d_imgOut;
     float *kernel = new float[w_k * w_k]; // height is same as width
 	int mean = w_k / 2;
 	float sum = 0.0;
-    int i = 0;
-    int j = 0;
-    for (i = 0; i < w_k; i++) {
-      for (j = 0; j < h_k; j++) {
+    for (int i = 0; i < w_k; i++) {
+      for (int j = 0; j < h_k; j++) {
+
         kernel[j + i * h_k] =
             (1.0f / (2.0f * pi * sigma * sigma))* 
                     exp( -1 * (((i - mean) * (i - mean) + (j - mean) * (j - mean)) /
                                (2 * sigma * sigma)));
-		//cout << kernel[j + i * h_k] << ", ";
-		// accumulate Kernel funtion values
+
 		sum += kernel[j + i * h_k];
+
       }
-	  //cout << endl;
     }
 
     // normilize the kernel sum
@@ -191,49 +224,68 @@ int main(int argc, char **argv) {
 
         if (kernel[j + i * h_k] > max)
           max = kernel[j + i * h_k];
-        // cout << kernel[j + i * h_k] << ", ";
       }
-      // cout << endl;
     }
-    // set max value to 1
-    cout << "max: " << max << endl;
+
     float *kernel_n = new float[w_k * w_k]; // height is same as width
 
     for (int i = 0; i < w_k; i++) {
       for (int j = 0; j < h_k; j++) {
 
         kernel_n[j + i * h_k] = kernel[j + i * h_k] / max;
-        // cout << kernel_n[j + i * h_k] << ", ";
+		
       }
-      // cout << endl;
     }
+
+	cudaMalloc(&d_kernel, w_k * h_k * sizeof(float));
+    cudaMalloc(&d_imgIn, nc * w * h * sizeof(float));
+    cudaMalloc(&d_imgOut, nc * w * h * sizeof(float));
+
+    cudaMemcpy(d_kernel, kernel, w_k * h_k * sizeof(float),
+               cudaMemcpyHostToDevice);
+    cudaMemcpy(d_imgIn, imgIn, nc * w * h * sizeof(float),
+               cudaMemcpyHostToDevice);
+	
+    dim3 block = dim3(32, 8, 1); // 32*8 = 256 threads
+    dim3 grid =
+        dim3((w + block.x - 1) / block.x, (h + block.y - 1) / block.y, 1);
+
+	convolution <<< grid, block >>> (d_imgIn, d_kernel, d_imgOut, nc, w, h, w_k, h_k);
+
+    cudaMemcpy(imgOut, d_imgOut, nc * w * h * sizeof(float),
+                   cudaMemcpyDeviceToHost);
+
+	cudaFree(d_imgIn);
+	cudaFree(d_imgOut);
+	cudaFree(d_kernel);
+
     // calculate convolution!
 	//TODO init imgOut
 
-    for (int c = 0; c < nc; c++)
-      for (int i = 0; i < w; i++) {
-        for (int j = 0; j < h; j++) {
-          imgOut[j * w + i] = 0;
-          for (int k = 0; k < w_k; k++) {
-            for (int l = 0; l < h_k; l++) {
-              int i_k = i - mean + k;
-              int j_k = j - mean + l;
+    /*for (int c = 0; c < nc; c++)*/
+      /*for (int i = 0; i < w; i++) {*/
+        /*for (int j = 0; j < h; j++) {*/
+          /*imgOut[j * w + i + w * h * c] = 0;*/
+          /*for (int k = 0; k < w_k; k++) {*/
+            /*for (int l = 0; l < h_k; l++) {*/
+              /*int i_k = i - mean + k;*/
+              /*int j_k = j - mean + l;*/
 
-              if (i_k < 0)
-                i_k = 0;
-              if (i_k > w - 1)
-                i_k = w - 1;
-              if (j_k > h - 1)
-                j_k = h - 1;
-              if (j_k < 0)
-                j_k = 0;
+              /*if (i_k < 0)*/
+                /*i_k = 0;*/
+              /*if (i_k > w - 1)*/
+                /*i_k = w - 1;*/
+              /*if (j_k > h - 1)*/
+                /*j_k = h - 1;*/
+              /*if (j_k < 0)*/
+                /*j_k = 0;*/
 
-              imgOut[j * w + i + w * h * c] +=
-                  kernel[l * w_k + k] * imgIn[j_k * w + i_k + w * h * c];
-            }
-          }
-        }
-      }
+              /*imgOut[j * w + i + w * h * c] +=*/
+                  /*kernel[l * w_k + k] * imgIn[j_k * w + i_k + w * h * c];*/
+            /*}*/
+          /*}*/
+        /*}*/
+      /*}*/
 
     // ###
     // ###
