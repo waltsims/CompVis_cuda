@@ -23,12 +23,12 @@ __device__ void forwardDifferenceX(float *du, float *u, int ind, int w) {
   du[ind] = u[ind + w] - u[ind];
 }
 
-__device__ void backwardsDifferenceY(float *du, float *u, int ind) {
-  du[ind] = u[ind - 1] - u[ind];
+__device__ float backwardsDifferenceY(float *u, int ind) {
+  return u[ind - 1] - u[ind];
 }
 
-__device__ void backwardsDifferenceX(float *du, float *u, int ind, int w) {
-  du[ind] = u[ind - w] - u[ind];
+__device__ float backwardsDifferenceX(float *u, int ind, int w) {
+  return u[ind - w] - u[ind];
 }
 
 __global__ void gradient(float *imgIn, float *imgOutY, float *imgOutX, int w,
@@ -39,13 +39,13 @@ __global__ void gradient(float *imgIn, float *imgOutY, float *imgOutX, int w,
   if (x < w && y < h) {
     for (int i = 0; i < nc; i++) {
       if (y + 1 < h) {
-        forwardDifferenceY(imgOutY, imgIn, ind);
+        forwardDifferenceY(imgOutY, imgIn, i * w * h + ind);
       } else
-        imgOutX[ind] = 0;
+        imgOutX[i * w * h + ind] = 0;
       if (x + 1 < w) {
-        forwardDifferenceX(imgOutX, imgIn, ind, w);
+        forwardDifferenceX(imgOutX, imgIn, i * w * h + ind, w);
       } else
-        imgOutY[ind] = 0;
+        imgOutY[i * w * h + ind] = 0;
     }
   }
 }
@@ -54,21 +54,22 @@ __global__ void divergence(float *v1, float *v2, float *div, int w, int h,
                            int nc) {
   int x = threadIdx.x + blockDim.x * blockIdx.x;
   int y = threadIdx.y + blockDim.y * blockIdx.y;
-  int ind = x + (size_t)w * y;
-  float *dv1;
-  float *dv2;
+  size_t ind = x + (size_t)w * y;
+  float dv1; 
+  float dv2;
   if (x < w && y < h) {
     for (int i = 0; i < nc; i++) {
+      size_t ind_loc = i * w * h + ind;
       if (y - 1 > 0) {
-        backwardsDifferenceY(dv1, v1, ind);
+        dv1 = backwardsDifferenceY( v1, ind_loc);
       } else
-        div[ind] = 0;
+        dv1= 0;
       if (x - 1 > 0) {
-        backwardsDifferenceX(dv2, v2, ind, w);
+        dv2 = backwardsDifferenceX( v2, ind_loc, w);
       } else
-        div[ind] = 0;
+        dv2= 0;
+      div[ind_loc] = dv1+ dv2;
     }
-    div[ind] = dv1[ind] + dv2[ind];
   }
 }
 
@@ -77,12 +78,15 @@ __global__ void l_2(float *imgIn, float *imgOut, int w, int h, int nc) {
   int y = threadIdx.y + blockDim.y * blockIdx.y;
   int ind = x + w * y;
   int i;
+  float val = 0;
+  float val_in;
 
   if (x < w && y < h) {
     for (i = 0; i < nc; i++) {
-      imgOut[ind] += imgIn[ind + w * h * i] * imgIn[ind + w * h * i];
+	  val_in = imgIn[ind + w * h * i] ;
+      val += val_in * val_in;
     }
-	imgOut[ind] = sqrt(imgOut[ind]);
+	imgOut[ind] = sqrtf(val);
   }
 }
 
@@ -177,10 +181,10 @@ int main(int argc, char **argv) {
   // ### TODO: Change the output image format as needed
   // ###
   // ###
-  cv::Mat mOut(h, w, mIn.type()); // mOut will have the same number of channels
+ // cv::Mat mOut(h, w, mIn.type()); // mOut will have the same number of channels
                                   // as the input image, nc layers
   // cv::Mat mOut(h,w,CV_32FC3);    // mOut will be a color image, 3 layers
-  // cv::Mat mOut(h,w,CV_32FC1);    // mOut will be a grayscale image, 1 layer
+   cv::Mat mOut(h,w,CV_32FC1);    // mOut will be a grayscale image, 1 layer
   // ### Define your own output images here as needed
 
   // Allocate arrays
@@ -238,9 +242,8 @@ int main(int argc, char **argv) {
     cudaMalloc(&d_imgOutX, nc * w * h * sizeof(float));
 	cudaMalloc(&d_div, nc * w * h * sizeof(float));
     cudaMalloc(&d_lap, w * h * sizeof(float));
-	
+
     cudaMemcpy(d_imgIn, imgIn, nc * w * h * sizeof(float),
-	
                cudaMemcpyHostToDevice);
 
     dim3 block = dim3(32, 8, 1); // 32*8 = 256 threads
@@ -251,14 +254,14 @@ int main(int argc, char **argv) {
     // TODO this kernel needs less space to be calcuated.  do I still use
     // the
     // same block size?
-	//TODO impliment divergence function
+    // TODO impliment divergence function
     divergence<<<grid, block>>>(d_imgOutY, d_imgOutX, d_div, w, h, nc);
-    //TODO impliment l2 norm function
+    // TODO impliment l2 norm function
 
-	l_2 <<<grid, block >>> ( d_div, d_lap, w, h, nc);
-	
-	cudaMemcpy(lap,  d_lap, w * h * sizeof(float), cudaMemcpyDeviceToHost);
-	
+    l_2<<<grid, block>>>(d_div, d_lap, w, h, nc);
+
+    cudaMemcpy(imgOut, d_lap, w * h * sizeof(float),
+                   cudaMemcpyDeviceToHost);
 
     cudaFree(d_imgIn);
     cudaFree(d_imgOutX);
