@@ -14,9 +14,11 @@ using namespace std;
 
 const float pi = 3.141592653589793238462;
 
+texture<float, 2, cudaReadModeElementType> texRef; // def at file scope
+
 // uncomment to use the camera
 //#define CAMERA
-__global__ void convolution(float *d_imgIn, float *d_kernel, float *d_imgOut,
+__global__ void sharedConvolution(float *d_imgIn, float *d_kernel, float *d_imgOut,
                             int nc, int w, int h, int w_k, int h_k, int r, int mean) {
 	//image coordinates
   int x = threadIdx.x + blockDim.x * blockIdx.x;
@@ -33,6 +35,10 @@ __global__ void convolution(float *d_imgIn, float *d_kernel, float *d_imgOut,
 
       // allocate shared array
       extern __shared__ float sh_imgIn[];
+
+  // Example
+  // shitf pointer to center of pixel
+  float val = tex2D(texRef, x + 0.5f, y + 0.5f);  
 
   int n = (sw * sh + (blockDim.x * blockDim.y - 1) ) / (blockDim.x *
                 blockDim.y); // how many loads do each thread have to perform
@@ -51,19 +57,19 @@ __global__ void convolution(float *d_imgIn, float *d_kernel, float *d_imgOut,
         int y_rel = blockDim.y * blockIdx.y + y_s - r;
 
         //  clamp at image boarders
-        if (x_rel < 0)
-          x_rel = 0;
-        if (x_rel > w - 1)
-          x_rel = w - 1;
-        if (y_rel < 0)
-          y_rel = 0;
-        if (y_rel > h - 1)
-          y_rel = h - 1;
+		if (x_rel < 0)
+		  x_rel = 0;
+		if (x_rel > w - 1)
+		  x_rel = w - 1;
+		if (y_rel < 0)
+		  y_rel = 0;
+		if (y_rel > h - 1)
+		  y_rel = h - 1;
 
         size_t ind_rel = x_rel + (size_t)w * y_rel + w * h * c;
 
-        if (s_ind < sw * sh)
-          sh_imgIn[s_ind] = d_imgIn[ind_rel];
+		if (s_ind < sw * sh)
+		  sh_imgIn[s_ind] = d_imgIn[ind_rel];
       }
 
       __syncthreads();
@@ -72,20 +78,59 @@ __global__ void convolution(float *d_imgIn, float *d_kernel, float *d_imgOut,
       // each thread reads elements to sh_imgIn
       size_t ind = x + (size_t)w * y + w * h * c;
       d_imgOut[ind] = 0; // initialize the output data to zero
-	  //d_imgOut[ind] = sh_imgIn[(threadIdx.x + r) + (threadIdx.y + r )* sw];
-	  for (int k = 0; k < w_k; k++) {
-		for (int l = 0; l < h_k; l++) {
-		  int i_k = threadIdx.x + k;
-		  int j_k = threadIdx.y + l;
-		  
-		  
-		  d_imgOut[ind] +=
-			  d_kernel[l * w_k + k] * sh_imgIn[j_k * sw + i_k];
-		}
-	  }
 
+	  d_imgOut[ind] = sh_imgIn[(threadIdx.x + r) + (threadIdx.y + r )* sw];
+      for (int k = 0; k < w_k; k++) {
+        for (int l = 0; l < h_k; l++) {
+          int i_k = threadIdx.x + k;
+          int j_k = threadIdx.y + l;
+
+
+          d_imgOut[ind] += d_kernel[l * w_k + k] * sh_imgIn[j_k * sw + i_k];
+        }
+      }
     }
   __syncthreads();
+  }
+}
+__global__ void textureConvolution(float *d_imgIn, float *d_kernel, float *d_imgOut,
+                            int nc, int w, int h, int w_k, int h_k, int r, int mean) {
+  // image coordinates
+  int x = threadIdx.x + blockDim.x * blockIdx.x;
+  int y = threadIdx.y + blockDim.y * blockIdx.y;
+  // block coords
+  int xblock = threadIdx.x; // local version of x
+  int yblock = threadIdx.y; // local version if y
+
+  // shared memore window dimensions
+  int sw = blockDim.x + 2 * r; // calculate size of window
+  int sh = blockDim.y + 2 * r;
+
+  for (int c = 0; c < nc; c++) {
+
+    if (x < w && y < h) {
+
+      // each thread reads elements to sh_imgIn
+      size_t ind = x + (size_t)w * y + w * h * c;
+      d_imgOut[ind] = 0; // initialize the output data to zero
+
+	/*float val = tex2D(texRef, x + 0.5f, y + 0.5f +  h * c);*/
+	 /*d_imgOut[ind] = val; */
+	 
+	  for (int k = 0; k < w_k; k++) {
+		for (int l = 0; l < h_k; l++) {
+
+		  int i_k = x - mean + k ;  //threadIdx.x + k;
+		  int j_k = y - mean + l;  //threadIdx.y + l;
+
+		  float val = tex2D(texRef, i_k + 0.5f, j_k + 0.5f +  h * c);
+
+		  d_imgOut[ind] +=
+			  d_kernel[l * w_k + k] * val; 
+		}
+	  }
+    }
+    __syncthreads();
   }
 }
 
@@ -275,23 +320,42 @@ int main(int argc, char **argv) {
       }
     }
 
-    cudaMalloc(&d_kernel, w_k * h_k * sizeof(float));
-    cudaMalloc(&d_imgIn, nc * w * h * sizeof(float));
-    cudaMalloc(&d_imgOut, nc * w * h * sizeof(float));
+    cudaMalloc(&d_kernel, w_k * h_k * sizeof(float)); CUDA_CHECK;
+    cudaMalloc(&d_imgIn, nc * w * h * sizeof(float)); CUDA_CHECK;
+    cudaMalloc(&d_imgOut, nc * w * h * sizeof(float)); CUDA_CHECK;
 
     cudaMemcpy(d_kernel, kernel, w_k * h_k * sizeof(float),
                cudaMemcpyHostToDevice);
+	CUDA_CHECK;
     cudaMemcpy(d_imgIn, imgIn, nc * w * h * sizeof(float),
                cudaMemcpyHostToDevice);
+	CUDA_CHECK;
 
     dim3 block = dim3(32, 8, 1); // 32*8 = 256 threads
     dim3 grid =
         dim3((w + block.x - 1) / block.x, (h + block.y - 1) / block.y, 1);
     size_t smBytes = (block.x + 2 * r) * (block.y + 2 * r) * sizeof(float);
 
+    texRef.addressMode[0] = cudaAddressModeClamp; // clamp x to border
+    texRef.addressMode[1] = cudaAddressModeClamp; // clampm y to border
+    texRef.filterMode = cudaFilterModeLinear;    // linear intermpolation
+    // access as (x + 0.5f, y + 0.5f), not as ((x+0.5f)/w,(y+0.5f)/h
+    texRef.normalized = false;
+
+    cudaChannelFormatDesc desc = cudaCreateChannelDesc<float>();
+	CUDA_CHECK;
+
+    cudaBindTexture2D(NULL, &texRef, d_imgIn, &desc, w, nc * h,
+                      w * sizeof(d_imgIn[0]));
+	CUDA_CHECK;
+
     // calculate convolution!
-    convolution<<<grid, block, smBytes>>>(d_imgIn, d_kernel, d_imgOut, nc, w, h,
+    /*sharedConvolution<<<grid, block, smBytes>>>(d_imgIn, d_kernel, d_imgOut, nc, w, h,*/
+                                          /*w_k, h_k, r, mean);*/
+    textureConvolution<<<grid, block, smBytes>>>(d_imgIn, d_kernel, d_imgOut, nc, w, h,
                                           w_k, h_k, r, mean);
+
+	cudaUnbindTexture(texRef);
 
     cudaMemcpy(imgOut, d_imgOut, nc * w * h * sizeof(float),
                cudaMemcpyDeviceToHost);
@@ -300,8 +364,6 @@ int main(int argc, char **argv) {
     cudaFree(d_imgOut);
     cudaFree(d_kernel);
 
-    // ###
-    // ###
     timer.end();
     float t = timer.get(); // elapsed time in seconds
     cout << "time: " << t * 1000 << " ms" << endl;
