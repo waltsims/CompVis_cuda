@@ -16,6 +16,8 @@ const float pi = 3.141592653589793238462;
 
 texture<float, 2, cudaReadModeElementType> texRef; // def at file scope
 
+__constant__ float c_kernel[41 * 41 * sizeof(float)];
+
 // uncomment to use the camera
 //#define CAMERA
 __global__ void sharedConvolution(float *d_imgIn, float *d_kernel, float *d_imgOut,
@@ -126,7 +128,7 @@ __global__ void textureConvolution(float *d_imgIn, float *d_kernel, float *d_img
 		  float val = tex2D(texRef, i_k + 0.5f, j_k + 0.5f +  h * c);
 
 		  d_imgOut[ind] +=
-			  d_kernel[l * w_k + k] * val; 
+			  c_kernel[l * w_k + k] * val; 
 		}
 	  }
     }
@@ -348,6 +350,8 @@ int main(int argc, char **argv) {
     cudaBindTexture2D(NULL, &texRef, d_imgIn, &desc, w, nc * h,
                       w * sizeof(d_imgIn[0]));
 	CUDA_CHECK;
+	
+	cudaMemcpyToSymbol(c_kernel, kernel, w_k * h_k * sizeof(float));
 
     // calculate convolution!
     /*sharedConvolution<<<grid, block, smBytes>>>(d_imgIn, d_kernel, d_imgOut, nc, w, h,*/
