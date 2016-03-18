@@ -21,7 +21,7 @@ __constant__ float c_kernel[41 * 41 * sizeof(float)];
 // uncomment to use the camera
 //#define CAMERA
 __global__ void sharedConvolution(float *d_imgIn, float *d_kernel, float *d_imgOut,
-                            int nc, int w, int h, int w_k, int h_k, int r, int mean) {
+                            int nc, int w, int h, int w_k, int h_k, int r, int mean, bool cmem) {
 	//image coordinates
   int x = threadIdx.x + blockDim.x * blockIdx.x;
   int y = threadIdx.y + blockDim.y * blockIdx.y;
@@ -40,7 +40,6 @@ __global__ void sharedConvolution(float *d_imgIn, float *d_kernel, float *d_imgO
 
   // Example
   // shitf pointer to center of pixel
-  float val = tex2D(texRef, x + 0.5f, y + 0.5f);  
 
   int n = (sw * sh + (blockDim.x * blockDim.y - 1) ) / (blockDim.x *
                 blockDim.y); // how many loads do each thread have to perform
@@ -81,14 +80,19 @@ __global__ void sharedConvolution(float *d_imgIn, float *d_kernel, float *d_imgO
       size_t ind = x + (size_t)w * y + w * h * c;
       d_imgOut[ind] = 0; // initialize the output data to zero
 
-	  d_imgOut[ind] = sh_imgIn[(threadIdx.x + r) + (threadIdx.y + r )* sw];
+//	  d_imgOut[ind] = sh_imgIn[(threadIdx.x + r) + (threadIdx.y + r )* sw];
       for (int k = 0; k < w_k; k++) {
         for (int l = 0; l < h_k; l++) {
           int i_k = threadIdx.x + k;
           int j_k = threadIdx.y + l;
 
+		  if (cmem){
 
+          d_imgOut[ind] += c_kernel[l * w_k + k] * sh_imgIn[j_k * sw + i_k];
+		  }else{
           d_imgOut[ind] += d_kernel[l * w_k + k] * sh_imgIn[j_k * sw + i_k];
+		  
+		  }
         }
       }
     }
@@ -96,7 +100,7 @@ __global__ void sharedConvolution(float *d_imgIn, float *d_kernel, float *d_imgO
   }
 }
 __global__ void textureConvolution(float *d_imgIn, float *d_kernel, float *d_imgOut,
-                            int nc, int w, int h, int w_k, int h_k, int r, int mean) {
+                            int nc, int w, int h, int w_k, int h_k, int r, int mean, bool cmem) {
   // image coordinates
   int x = threadIdx.x + blockDim.x * blockIdx.x;
   int y = threadIdx.y + blockDim.y * blockIdx.y;
@@ -127,8 +131,13 @@ __global__ void textureConvolution(float *d_imgIn, float *d_kernel, float *d_img
 
 		  float val = tex2D(texRef, i_k + 0.5f, j_k + 0.5f +  h * c);
 
+		  if(cmem){
 		  d_imgOut[ind] +=
 			  c_kernel[l * w_k + k] * val; 
+		  }else{
+		  d_imgOut[ind] +=
+			  d_kernel[l * w_k + k] * val; 
+		  }
 		}
 	  }
     }
@@ -180,6 +189,12 @@ int main(int argc, char **argv) {
   getParam("sigma", sigma, argc, argv);
   cout << "sigma: " << sigma << endl;
 // ### Define your own parameters here as needed
+  bool shared = false;
+  getParam("shared", shared, argc, argv);
+  cout << "shared: " << shared << endl;
+  bool cmem = false;
+  getParam("cmem", cmem, argc, argv);
+  cout << "constant memory: " << cmem << endl;
 
 // Init camera / Load input image
 #ifdef CAMERA
@@ -338,6 +353,15 @@ int main(int argc, char **argv) {
         dim3((w + block.x - 1) / block.x, (h + block.y - 1) / block.y, 1);
     size_t smBytes = (block.x + 2 * r) * (block.y + 2 * r) * sizeof(float);
 
+	CUDA_CHECK;
+	
+	cudaMemcpyToSymbol(c_kernel, kernel, w_k * h_k * sizeof(float));
+
+    // calculate convolution!
+	if (shared){
+	sharedConvolution<<<grid, block, smBytes>>>(d_imgIn, d_kernel, d_imgOut, nc, w, h,
+										  w_k, h_k, r, mean, cmem);
+	}else{
     texRef.addressMode[0] = cudaAddressModeClamp; // clamp x to border
     texRef.addressMode[1] = cudaAddressModeClamp; // clampm y to border
     texRef.filterMode = cudaFilterModeLinear;    // linear intermpolation
@@ -349,15 +373,10 @@ int main(int argc, char **argv) {
 
     cudaBindTexture2D(NULL, &texRef, d_imgIn, &desc, w, nc * h,
                       w * sizeof(d_imgIn[0]));
-	CUDA_CHECK;
 	
-	cudaMemcpyToSymbol(c_kernel, kernel, w_k * h_k * sizeof(float));
-
-    // calculate convolution!
-    /*sharedConvolution<<<grid, block, smBytes>>>(d_imgIn, d_kernel, d_imgOut, nc, w, h,*/
-                                          /*w_k, h_k, r, mean);*/
-    textureConvolution<<<grid, block, smBytes>>>(d_imgIn, d_kernel, d_imgOut, nc, w, h,
-                                          w_k, h_k, r, mean);
+    textureConvolution<<<grid, block>>>(d_imgIn, d_kernel, d_imgOut, nc, w, h,
+                                          w_k, h_k, r, mean, cmem);
+	}
 
 	cudaUnbindTexture(texRef);
 
