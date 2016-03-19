@@ -45,7 +45,7 @@ __device__ float backwardsDifferenceY(float *u, int ind, int w) {
 }
 
 
-__device__ void getGradient(float *imgIn, float *imgOutY, float *imgOutX, int w,
+__device__ void getGradient(float * d_imgIn, float *d_imgOutY, float *d_imgOutX, int w,
                          int h, int nc) {
 
   int x = threadIdx.x + blockDim.x * blockIdx.x;
@@ -54,17 +54,17 @@ __device__ void getGradient(float *imgIn, float *imgOutY, float *imgOutX, int w,
 
   if (x < w && y < h) {
     for (int c = 0; c < nc; c++) {
-		imgOutX[ind + w * h * c] = 0;
-		imgOutX[ind + w * h * c] = 0;
-      if (y + 1 < h) {
-        forwardDifferenceY(imgOutY, imgIn, c * w * h + ind, w);
-      } else
-        imgOutY[c * w * h + ind] = 0;
-      if (x + 1 < w) {
-        forwardDifferenceX(imgOutX, imgIn, c * w * h + ind);
-      } else
-        imgOutY[c * w * h + ind] = 0;
-    }
+		d_imgOutY[ind + w * h * c] = 0;
+		d_imgOutX[ind + w * h * c] = 0;
+	  if (y + 1 < h) {
+		forwardDifferenceY(d_imgOutY,  d_imgIn, c * w * h + ind, w);
+	  } else
+		d_imgOutY[c * w * h + ind] = 0;
+	  if (x + 1 < w) {
+		forwardDifferenceX(d_imgOutX,  d_imgIn, c * w * h + ind);
+	  } else
+		d_imgOutX[c * w * h + ind] = 0;
+	}
   }
 }
 
@@ -86,14 +86,14 @@ __device__ void getDivergence(float *v1, float *v2, float *d_div, int w, int h,
         dv2 = backwardsDifferenceY( v2, ind_loc, w);
       } else
         dv2= 0;
+      d_div[ind_loc] = dv1+ dv2;
     }
-      d_div[ind] = dv1+ dv2;
   }
 }
 
 
-__global__ void updateImg(float *d_imgIn, float *d_imgOutX, float *d_imgOutY,
-                          float *d_div, int d_nItterations, float tau, int w,
+__global__ void updateImg(float *d_imgIn, float * d_div, float *d_imgOutX, float *d_imgOutY,
+                          int d_nItterations, float tau, int w,
                           int h, int nc) {
 
   int x = threadIdx.x + blockDim.x * blockIdx.x;
@@ -302,8 +302,7 @@ cout << "this is real"	<< endl;
                cudaMemcpyHostToDevice);
 
     dim3 block = dim3(32, 8, 1); // 32*8 = 256 threads
-    dim3 grid =
-	dim3((w + block.x - 1) / block.x, (h + block.y - 1) / block.y, 1);
+    dim3 grid = dim3((w + block.x - 1) / block.x, (h + block.y - 1) / block.y, 1);
 
     //  impliment l2 norm function
     updateImg<<<grid, block>>>(d_imgIn, d_div, d_imgOutX, d_imgOutY, N, tau, w,
@@ -311,8 +310,11 @@ cout << "this is real"	<< endl;
 
     //l_2<<<grid, block>>>(d_div, d_lap, w, h, nc);
 
-    cudaMemcpy(imgOut, d_imgOutY, nc * w * h * sizeof(float), cudaMemcpyDeviceToHost);
+
+	
+    cudaMemcpy(imgOut, d_imgIn, nc * w * h * sizeof(float), cudaMemcpyDeviceToHost);
     cudaFree(d_imgOutY);
+	cudaFree(d_imgOutX);
     cudaFree(d_div);
 	cudaFree(d_lap);
 
