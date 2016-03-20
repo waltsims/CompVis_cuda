@@ -38,10 +38,16 @@ __device__ float backwardsDifferenceY(float *u, int ind, int w) {
   size_t ind = x + (size_t)w * y;
 
   // TODO compute diffusivity factor either here or elsewhere
-  float factor = 1;
+  float eps = 0.01;
+  float factorX = 1;
+  float factorY = 1;
+  /*float factorX = 1.f/max (d_v1[ind], eps);*/
+  /*float factorY = 1.f/max (d_v2[ind], eps);*/
+  /*float factorX = exp( (d_v1[ind] * d_v1[ind]) * -1 / eps) / eps ;*/
+  /*float factorY = exp( (d_v2[ind] * d_v2[ind]) * -1 / eps) / eps ;*/
 
-    d_v1[ind ] *= factor;
-    d_v2[ind +  w * h] *= factor;
+    d_v1[ind ] *= factorX;
+    d_v2[ind ] *= factorY;
 }
 
 
@@ -81,12 +87,12 @@ __device__ void getDivergence(float *v1, float *v2, float *d_div, int w, int h,
       if (y  > 0) {
         dv1 = backwardsDifferenceX( v1, ind_loc);
       } else
-        dv1= 0;
+        dv1= v1[ind_loc];
       if (x  > 0) {
         dv2 = backwardsDifferenceY( v2, ind_loc, w);
       } else
-        dv2= 0;
-      d_div[ind_loc] = dv1+ dv2;
+        dv2= v2[ind_loc];
+      d_div[ind_loc] = dv1 + dv2;
     }
   }
 }
@@ -113,22 +119,6 @@ __global__ void updateImg(float *d_imgIn, float * d_div, float *d_imgOutX, float
 	  d_imgIn[ind + c * w * h] += tau *  d_div[ind + c * w * h];
 	}
 	}
-  }
-}
-__global__ void l_2(float *imgIn, float *imgOut, int w, int h, int nc) {
-  int x = threadIdx.x + blockDim.x * blockIdx.x;
-  int y = threadIdx.y + blockDim.y * blockIdx.y;
-  int ind = x + w * y;
-  int i;
-  float val = 0;
-  float val_in;
-
-  if (x < w && y < h) {
-    for (i = 0; i < nc; i++) {
-      val_in = imgIn[ind + w * h * i];
-      val += val_in * val_in;
-    }
-	imgOut[ind] = sqrtf(val);
   }
 }
 
@@ -316,6 +306,7 @@ cout << "this is real"	<< endl;
     cudaFree(d_imgOutY);
 	cudaFree(d_imgOutX);
     cudaFree(d_div);
+	cudaFree(d_imgIn);
 	cudaFree(d_lap);
 
     // ###
