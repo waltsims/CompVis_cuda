@@ -31,7 +31,7 @@ __device__ float backwardsDifferenceY(float *u, int ind, int w) {
 }
 
  __device__ void getDiffusion(float *d_v1, float *d_v2, int w, int h,
-                                      int nc) {
+                                      int nc, int g) {
 
   int x = threadIdx.x + blockDim.x * blockIdx.x;
   int y = threadIdx.y + blockDim.y * blockIdx.y;
@@ -39,12 +39,25 @@ __device__ float backwardsDifferenceY(float *u, int ind, int w) {
 
   // TODO compute diffusivity factor either here or elsewhere
   float eps = 0.01;
-  float factorX = 1;
-  float factorY = 1;
-  /*float factorX = 1.f/max (d_v1[ind], eps);*/
-  /*float factorY = 1.f/max (d_v2[ind], eps);*/
-  /*float factorX = exp( (d_v1[ind] * d_v1[ind]) * -1 / eps) / eps ;*/
-  /*float factorY = exp( (d_v2[ind] * d_v2[ind]) * -1 / eps) / eps ;*/
+  float factorX;
+  float factorY;
+
+  switch (g){
+  case 0:
+   factorX = 1;
+   factorY = 1;
+  break;
+
+ case 1:
+    factorX = 1 / max(d_v1[ind], eps);
+    factorY = 1 / max(d_v2[ind], eps);
+   break;
+
+ case 2:
+    factorX = exp(-(d_v1[ind] * d_v1[ind]) / eps) / eps;
+    factorY = exp(-(d_v2[ind] * d_v2[ind]) / eps) / eps;
+   break;
+  }
 
     d_v1[ind ] *= factorX;
     d_v2[ind ] *= factorY;
@@ -100,7 +113,7 @@ __device__ void getDivergence(float *v1, float *v2, float *d_div, int w, int h,
 
 __global__ void updateImg(float *d_imgIn, float * d_div, float *d_imgOutX, float *d_imgOutY,
                           int d_nItterations, float tau, int w,
-                          int h, int nc) {
+                          int h, int nc, int g) {
 
   int x = threadIdx.x + blockDim.x * blockIdx.x;
   int y = threadIdx.y + blockDim.y * blockIdx.y;
@@ -110,7 +123,7 @@ __global__ void updateImg(float *d_imgIn, float * d_div, float *d_imgOutX, float
 
     getGradient(d_imgIn, d_imgOutY, d_imgOutX, w, h, nc);
 //	 impliment difusion function
-	getDiffusion(d_imgOutX, d_imgOutY, w, h, nc);
+	getDiffusion(d_imgOutX, d_imgOutY, w, h, nc, g);
 	// impliment divergence function
 	getDivergence(d_imgOutX, d_imgOutY, d_div, w, h, nc);
 
@@ -172,6 +185,10 @@ int main(int argc, char **argv) {
   float tau = 0.02;
   getParam("tau", tau, argc, argv);
   cout << "tau: " << tau << endl;
+
+  int g = 0;
+  getParam("g", g, argc, argv);
+  cout << "g: " << g << endl;
 
   int N = 1;
   getParam("N", N, argc, argv);
@@ -296,7 +313,7 @@ cout << "this is real"	<< endl;
 
     //  impliment l2 norm function
     updateImg<<<grid, block>>>(d_imgIn, d_div, d_imgOutX, d_imgOutY, N, tau, w,
-                               h, nc);
+                               h, nc, g);
 
     //l_2<<<grid, block>>>(d_div, d_lap, w, h, nc);
 
